@@ -1,0 +1,60 @@
+name: 旧版 Keeper 反编译修补
+
+# 全部跑在公开仓库的 GitHub-hosted runner 容器里,不占用私有仓库的 Actions 额度。
+# 流程: apktool 反编译原版 APK -> 覆盖历史补丁基线 -> 跑本轮四项修补
+#       -> 重打包 -> 用标准 Android debug key 签名 -> 校验 -> 上传签名 APK
+on:
+  push:
+    paths:
+      - 'legacy/**'
+      - '.github/workflows/build-legacy.yml'
+  workflow_dispatch:
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 反编译原版 APK
+        run: |
+          java -jar legacy/tools/apktool.jar d legacy/original/Keeper.apk -o build/dec -f
+
+      # legacy/patches 里的两个 smali 是「历史补丁基线」(通知权限、快速清场、
+      # 卸载重装、shrun 调用逻辑等),不是原版。先覆盖,再跑本轮四项修补。
+      - name: 应用补丁
+        run: |
+          cp legacy/patches/Payloads.smali     build/dec/smali/com/sk/keeper/Payloads.smali
+          cp legacy/patches/MainActivity.smali build/dec/smali/com/sk/keeper/MainActivity.smali
+          python3 legacy/patches/apply_fixes.py build/dec legacy/assets/sk/shrun
+
+      - name: 重打包
+        run: |
+          java -jar legacy/tools/apktool.jar b build/dec -o build/Keeper_legacy_unsigned.apk
+
+      # uber-apk-signer 不传 --ks 时会用内置的标准 Android debug keystore,
+      # 每次构建证书一致,新版可以直接覆盖安装,不用先卸载。
+      - name: 签名
+        run: |
+          java -jar legacy/tools/uber-apk-signer.jar \
+            -a build/Keeper_legacy_unsigned.apk --allowResign -o build/out
+
+      - name: 校验产物
+        run: |
+          python3 -c "import glob,zipfile; p=glob.glob('build/out/*debugSigned.apk')[0]; a=zipfile.ZipFile(p); n=set(a.namelist()); assert 'assets/sk/shrun' in n, 'shrun 没进包'; d=a.read('classes.dex'); assert b'sk/shrun' in d and b'state/no_pull' in d, '补丁没进 dex'; print('OK', p, a.getinfo('assets/sk/shrun').file_size)"
+
+      - name: 上传签名 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: keeper-legacy-patched
+          path: build/out/*debugSigned.apk
+          retention-days: 30
