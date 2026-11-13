@@ -110,6 +110,21 @@ clear_ep = '''    invoke-direct {p0}, Lcom/sk/keeper/MainActivity;->prefs()Landr
 
 '''
 m = rep(m, "    .line 401\n    return v3", clear_ep + "    .line 401\n    return v3", 1)
+
+# ---- 5. onCreate 里通知权限判断写反了 ----
+# checkSelfPermission: 0=已授权, -1=未授权。原来写的 if-nez(非0就跳过),
+# 导致「没授权时跳过申请、已授权时反而申请」,打开 App 永远看不到权限弹窗。
+# 改成 if-eqz(已授权才跳过)。基线 smali 可能已修过,所以两种状态都接受。
+bad = "    if-nez v0, :cond_notif_perm"
+good = "    if-eqz v0, :cond_notif_perm"
+if bad in m:
+    m = rep(m, bad, good, 1)
+    print("  修正 onCreate 通知权限判断: if-nez -> if-eqz")
+elif good in m:
+    print("  onCreate 通知权限判断已是正确版,跳过")
+else:
+    raise SystemExit("通知权限补丁锚点丢失(错误版和正确版都没找到)")
+
 MAIN.write_text(m, encoding="utf-8")
 
 # ---- assets + apktool.yml(doNotCompress 要包含新二进制) ----
