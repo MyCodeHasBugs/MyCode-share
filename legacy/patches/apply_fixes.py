@@ -90,6 +90,11 @@ s = rep(
     "    :cond_1\n" + shrun_smali + '    const-string v2, "\\u53ef\\u6267\\u884c  "',
     1,
 )
+
+# ---- 6. 提速:守护循环 2s -> 0.5s,装完等 key 恢复 1s -> 0.3s ----
+# toybox 的 sleep 支持小数秒;万一某个 ROM 不支持,循环会空转,那时改回整数。
+s = rep(s, "while :; do sleep 2; ", "while :; do sleep 0.5; ", 1)
+s = rep(s, "sleep 1; run-as", "sleep 0.3; run-as", 1)
 PAY.write_text(s, encoding="utf-8")
 
 # ---- 2. 二次激活:connect 不含 connected 时清掉过期的 endpoint 缓存 ----
@@ -124,6 +129,10 @@ elif good in m:
     print("  onCreate 通知权限判断已是正确版,跳过")
 else:
     raise SystemExit("通知权限补丁锚点丢失(错误版和正确版都没找到)")
+
+# ---- 7. 提速:UI 状态轮询 1s / 2s 统一压到 0.5s ----
+m = rep(m, "    const-wide/16 v2, 0x3e8", "    const-wide/16 v2, 0x1f4", 1)
+m = rep(m, "    const-wide/16 v5, 0x7d0", "    const-wide/16 v5, 0x1f4", 1)
 
 MAIN.write_text(m, encoding="utf-8")
 
