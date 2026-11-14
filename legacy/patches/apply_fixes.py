@@ -18,6 +18,92 @@ import sys
 
 DEC = pathlib.Path(sys.argv[1])
 SHRUN = pathlib.Path(sys.argv[2])
+
+# 拦截弹窗用的 Runnable:后台轮询线程不能直接 show AlertDialog,
+# 必须 post 回 UI 线程,否则抛 "Can't create handler inside thread ..."。
+BLOCKED_DIALOG_SMALI = r'''.class final Lcom/sk/keeper/MainActivity$BlockedDialog;
+.super Ljava/lang/Object;
+.implements Ljava/lang/Runnable;
+
+
+.field private final activity:Lcom/sk/keeper/MainActivity;
+
+.field private final text:Ljava/lang/String;
+
+
+.method constructor <init>(Lcom/sk/keeper/MainActivity;Ljava/lang/String;)V
+    .locals 0
+
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+    iput-object p1, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->activity:Lcom/sk/keeper/MainActivity;
+
+    iput-object p2, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->text:Ljava/lang/String;
+
+    return-void
+.end method
+
+
+.method public run()V
+    .locals 5
+
+    :try_start_0
+    new-instance v0, Landroid/app/AlertDialog$Builder;
+
+    iget-object v1, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->activity:Lcom/sk/keeper/MainActivity;
+
+    invoke-direct {v0, v1}, Landroid/app/AlertDialog$Builder;-><init>(Landroid/content/Context;)V
+
+    const-string v1, "\u26a0 Keeper \u5df2\u963b\u6b62\u6b64\u5a01\u80c1"
+
+    invoke-virtual {v0, v1}, Landroid/app/AlertDialog$Builder;->setTitle(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+
+    move-result-object v0
+
+    const-string v1, "\u68c0\u6d4b\u5230\u9488\u5bf9 Keeper \u7684\u547d\u4ee4,\u6267\u884c\u8fdb\u7a0b\u5df2\u88ab\u7ec8\u6b62\u3002\n\n\u547d\u4ee4\u4e0e\u6765\u6e90:\n"
+
+    iget-object v2, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->text:Ljava/lang/String;
+
+    new-instance v3, Ljava/lang/StringBuilder;
+
+    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
+
+    invoke-virtual {v3, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    move-result-object v1
+
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    move-result-object v1
+
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v1
+
+    invoke-virtual {v0, v1}, Landroid/app/AlertDialog$Builder;->setMessage(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+
+    move-result-object v0
+
+    const-string v1, "\u597d\u7684"
+
+    const/4 v2, 0x0
+
+    invoke-virtual {v0, v1, v2}, Landroid/app/AlertDialog$Builder;->setPositiveButton(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;
+
+    move-result-object v0
+
+    invoke-virtual {v0}, Landroid/app/AlertDialog$Builder;->show()Landroid/app/AlertDialog;
+    :try_end_0
+    .catchall {:try_start_0 .. :try_end_0} :catchall_0
+
+    return-void
+
+    :catchall_0
+    move-exception v0
+
+    return-void
+.end method
+'''
 PAY = DEC / "smali/com/sk/keeper/Payloads.smali"
 MAIN = DEC / "smali/com/sk/keeper/MainActivity.smali"
 YML = DEC / "apktool.yml"
@@ -150,7 +236,70 @@ new_pair = ('    invoke-virtual {v1}, Lcom/sk/keeper/AdbCli;->killServer()V\n'
             '(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;')
 m = rep(m, old_pair, new_pair, 1)
 
+# ---- 9. 拦截弹窗:读 sk_guard 写的 state/blocked_last,内容变了就弹 ----
+m = rep(
+    m,
+    ".field private hint:Landroid/widget/TextView;",
+    ".field private hint:Landroid/widget/TextView;\n"
+    "\n"
+    "# 上一次弹过的拦截记录,避免同一条反复弹\n"
+    ".field private lastBlocked:Ljava/lang/String;",
+    1,
+)
+
+old_poll = ('    .line 487\n'
+            '    :cond_0\n'
+            '    iget-object v8, p0, Lcom/sk/keeper/MainActivity;->shell:Lcom/sk/keeper/Shell;\n'
+            '\n'
+            '    invoke-static {v8}, Lcom/sk/keeper/Payloads;->status(Lcom/sk/keeper/Shell;)Ljava/lang/String;')
+new_poll = '''    .line 487
+    :cond_0
+    iget-object v9, p0, Lcom/sk/keeper/MainActivity;->shell:Lcom/sk/keeper/Shell;
+
+    const-string v10, "cat /data/local/tmp/.sk/state/blocked_last 2>/dev/null"
+
+    invoke-interface {v9, v10}, Lcom/sk/keeper/Shell;->exec(Ljava/lang/String;)Ljava/lang/String;
+
+    move-result-object v9
+
+    invoke-virtual {v9}, Ljava/lang/String;->trim()Ljava/lang/String;
+
+    move-result-object v9
+
+    invoke-virtual {v9}, Ljava/lang/String;->isEmpty()Z
+
+    move-result v10
+
+    if-nez v10, :cond_blocked
+
+    iget-object v10, p0, Lcom/sk/keeper/MainActivity;->lastBlocked:Ljava/lang/String;
+
+    invoke-virtual {v9, v10}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+
+    move-result v10
+
+    if-nez v10, :cond_blocked
+
+    iput-object v9, p0, Lcom/sk/keeper/MainActivity;->lastBlocked:Ljava/lang/String;
+
+    new-instance v10, Lcom/sk/keeper/MainActivity$BlockedDialog;
+
+    invoke-direct {v10, p0, v9}, Lcom/sk/keeper/MainActivity$BlockedDialog;-><init>(Lcom/sk/keeper/MainActivity;Ljava/lang/String;)V
+
+    iget-object v9, p0, Lcom/sk/keeper/MainActivity;->ui:Landroid/os/Handler;
+
+    invoke-virtual {v9, v10}, Landroid/os/Handler;->post(Ljava/lang/Runnable;)Z
+
+    :cond_blocked
+    iget-object v8, p0, Lcom/sk/keeper/MainActivity;->shell:Lcom/sk/keeper/Shell;
+
+    invoke-static {v8}, Lcom/sk/keeper/Payloads;->status(Lcom/sk/keeper/Shell;)Ljava/lang/String;'''
+m = rep(m, old_poll, new_poll, 1)
+
 MAIN.write_text(m, encoding="utf-8")
+
+(DEC / "smali/com/sk/keeper/MainActivity$BlockedDialog.smali").write_text(
+    BLOCKED_DIALOG_SMALI, encoding="utf-8")
 
 # ---- assets + apktool.yml(doNotCompress 要包含新二进制) ----
 dst = DEC / "assets/sk/shrun"
