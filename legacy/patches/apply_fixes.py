@@ -134,6 +134,22 @@ else:
 m = rep(m, "    const-wide/16 v2, 0x3e8", "    const-wide/16 v2, 0x1f4", 1)
 m = rep(m, "    const-wide/16 v5, 0x7d0", "    const-wide/16 v5, 0x1f4", 1)
 
+# ---- 8. 配对前强制重启 adb server ----
+# 借 Shizuku starter 的做法:起新进程之前先把旧的清掉。
+# 上一轮配对失败留下的 server 状态不干净时,client 会在读 status 应答阶段
+# 被关连接,表现就是 protocol fault (couldn't read status message)。
+old_pair = ('    .line 969\n'
+            '    invoke-virtual {v1, v2, p1}, Lcom/sk/keeper/AdbCli;->pair'
+            '(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;')
+new_pair = ('    invoke-virtual {v1}, Lcom/sk/keeper/AdbCli;->killServer()V\n'
+            '\n'
+            '    invoke-virtual {v1}, Lcom/sk/keeper/AdbCli;->startServer()Z\n'
+            '\n'
+            '    .line 969\n'
+            '    invoke-virtual {v1, v2, p1}, Lcom/sk/keeper/AdbCli;->pair'
+            '(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;')
+m = rep(m, old_pair, new_pair, 1)
+
 MAIN.write_text(m, encoding="utf-8")
 
 # ---- assets + apktool.yml(doNotCompress 要包含新二进制) ----
