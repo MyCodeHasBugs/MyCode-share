@@ -16,6 +16,104 @@ import pathlib
 import shutil
 import sys
 
+BLOCKED_LAYOUT_XML = r'''<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#FF12181F"
+    android:orientation="vertical"
+    android:paddingLeft="22dp"
+    android:paddingTop="20dp"
+    android:paddingRight="22dp"
+    android:paddingBottom="14dp">
+
+    <TextView
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center_horizontal"
+        android:background="@drawable/bg_keeper_badge"
+        android:gravity="center"
+        android:text="K"
+        android:textColor="#FF7FB3E0"
+        android:textSize="22sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:text="Keeper 已阻止此威胁"
+        android:textColor="#FFE5484D"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center"
+        android:text="检测到针对 Keeper 的命令，执行进程已被终止"
+        android:textColor="#FF6F8091"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:background="#1AE5484D"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="危险程度：极高"
+            android:textColor="#FFF07A7D"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvBlockedMeta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="#FFC8D2E0"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="命令内容"
+        android:textColor="#FF6F8091"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/tvBlockedCmd"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="#1AFFFFFF"
+        android:fontFamily="monospace"
+        android:padding="10dp"
+        android:textColor="#FFD6E4F0"
+        android:textIsSelectable="true"
+        android:textSize="12sp" />
+</LinearLayout>
+'''
+
+BADGE_XML = r'''<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#FF12202E" />
+    <stroke
+        android:width="1dp"
+        android:color="#FF2F4D69" />
+</shape>
+'''
+
 DEC = pathlib.Path(sys.argv[1])
 SHRUN = pathlib.Path(sys.argv[2])
 
@@ -25,6 +123,9 @@ BLOCKED_DIALOG_SMALI = r'''.class final Lcom/sk/keeper/MainActivity$BlockedDialo
 .super Ljava/lang/Object;
 .implements Ljava/lang/Runnable;
 
+
+# 拦截提示弹窗。后台轮询线程不能直接 show(),
+# 这里 post 回 UI 线程再 inflate 自定义布局。
 
 .field private final activity:Lcom/sk/keeper/MainActivity;
 
@@ -45,54 +146,95 @@ BLOCKED_DIALOG_SMALI = r'''.class final Lcom/sk/keeper/MainActivity$BlockedDialo
 
 
 .method public run()V
-    .locals 5
+    .locals 10
 
     :try_start_0
-    new-instance v0, Landroid/app/AlertDialog$Builder;
+    iget-object v0, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->activity:Lcom/sk/keeper/MainActivity;
 
-    iget-object v1, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->activity:Lcom/sk/keeper/MainActivity;
-
-    invoke-direct {v0, v1}, Landroid/app/AlertDialog$Builder;-><init>(Landroid/content/Context;)V
-
-    const-string v1, "\u26a0 Keeper \u5df2\u963b\u6b62\u6b64\u5a01\u80c1"
-
-    invoke-virtual {v0, v1}, Landroid/app/AlertDialog$Builder;->setTitle(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
-
-    move-result-object v0
-
-    const-string v1, "\u68c0\u6d4b\u5230\u9488\u5bf9 Keeper \u7684\u547d\u4ee4,\u6267\u884c\u8fdb\u7a0b\u5df2\u88ab\u7ec8\u6b62\u3002\n\n\u547d\u4ee4\u4e0e\u6765\u6e90:\n"
-
-    iget-object v2, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->text:Ljava/lang/String;
-
-    new-instance v3, Ljava/lang/StringBuilder;
-
-    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
-
-    invoke-virtual {v3, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v0}, Landroid/content/Context;->getResources()Landroid/content/res/Resources;
 
     move-result-object v1
 
-    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    # 新增布局没有固定 ID,按名字查
+    const-string v2, "dialog_blocked"
 
-    move-result-object v1
+    const-string v3, "layout"
 
-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    const-string v4, "com.sk.keeper"
 
-    move-result-object v1
+    invoke-virtual {v1, v2, v3, v4}, Landroid/content/res/Resources;->getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I
 
-    invoke-virtual {v0, v1}, Landroid/app/AlertDialog$Builder;->setMessage(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+    move-result v2
 
-    move-result-object v0
+    invoke-static {v0}, Landroid/view/LayoutInflater;->from(Landroid/content/Context;)Landroid/view/LayoutInflater;
 
-    const-string v1, "\u597d\u7684"
+    move-result-object v3
 
-    const/4 v2, 0x0
+    const/4 v4, 0x0
 
-    invoke-virtual {v0, v1, v2}, Landroid/app/AlertDialog$Builder;->setPositiveButton(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;
+    invoke-virtual {v3, v2, v4}, Landroid/view/LayoutInflater;->inflate(ILandroid/view/ViewGroup;)Landroid/view/View;
 
-    move-result-object v0
+    move-result-object v2
 
-    invoke-virtual {v0}, Landroid/app/AlertDialog$Builder;->show()Landroid/app/AlertDialog;
+    # 命令正文
+    const-string v3, "tvBlockedCmd"
+
+    const-string v4, "id"
+
+    const-string v5, "com.sk.keeper"
+
+    invoke-virtual {v1, v3, v4, v5}, Landroid/content/res/Resources;->getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I
+
+    move-result v3
+
+    invoke-virtual {v2, v3}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v3
+
+    check-cast v3, Landroid/widget/TextView;
+
+    iget-object v4, p0, Lcom/sk/keeper/MainActivity$BlockedDialog;->text:Ljava/lang/String;
+
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+
+    # 风险卡里的说明
+    const-string v3, "tvBlockedMeta"
+
+    const-string v4, "id"
+
+    const-string v5, "com.sk.keeper"
+
+    invoke-virtual {v1, v3, v4, v5}, Landroid/content/res/Resources;->getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I
+
+    move-result v3
+
+    invoke-virtual {v2, v3}, Landroid/view/View;->findViewById(I)Landroid/view/View;
+
+    move-result-object v3
+
+    check-cast v3, Landroid/widget/TextView;
+
+    const-string v4, "\u6765\u81ea sk_guard \u7684\u62e6\u622a\u8bb0\u5f55\uff0c\u6267\u884c\u8fdb\u7a0b\u5df2\u7ec8\u6b62"
+
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+
+    new-instance v3, Landroid/app/AlertDialog$Builder;
+
+    invoke-direct {v3, v0}, Landroid/app/AlertDialog$Builder;-><init>(Landroid/content/Context;)V
+
+    invoke-virtual {v3, v2}, Landroid/app/AlertDialog$Builder;->setView(Landroid/view/View;)Landroid/app/AlertDialog$Builder;
+
+    move-result-object v3
+
+    const-string v4, "\u597d\u7684"
+
+    const/4 v5, 0x0
+
+    invoke-virtual {v3, v4, v5}, Landroid/app/AlertDialog$Builder;->setPositiveButton(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;
+
+    move-result-object v3
+
+    invoke-virtual {v3}, Landroid/app/AlertDialog$Builder;->show()Landroid/app/AlertDialog;
     :try_end_0
     .catchall {:try_start_0 .. :try_end_0} :catchall_0
 
@@ -300,6 +442,12 @@ MAIN.write_text(m, encoding="utf-8")
 
 (DEC / "smali/com/sk/keeper/MainActivity$BlockedDialog.smali").write_text(
     BLOCKED_DIALOG_SMALI, encoding="utf-8")
+
+(DEC / "res/layout").mkdir(parents=True, exist_ok=True)
+(DEC / "res/layout/dialog_blocked.xml").write_text(BLOCKED_LAYOUT_XML, encoding="utf-8")
+
+(DEC / "res/drawable").mkdir(parents=True, exist_ok=True)
+(DEC / "res/drawable/bg_keeper_badge.xml").write_text(BADGE_XML, encoding="utf-8")
 
 # ---- assets + apktool.yml(doNotCompress 要包含新二进制) ----
 dst = DEC / "assets/sk/shrun"
