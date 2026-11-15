@@ -358,6 +358,35 @@ elif good in m:
 else:
     raise SystemExit("通知权限补丁锚点丢失(错误版和正确版都没找到)")
 
+# ---- 5b. 通知被关时不要只 toast:直接跳到本应用的系统通知设置页 ----
+# 真机反馈「通知有问题,他不找你授权」:Android 13+ 首次拒绝后系统不会再弹,
+# 而 startPairNotify 只打印「总开关是关的」就 return,用户没有入口去开。
+notif_off = r'''    const-string v0, "\u901a\u77e5\u88ab\u5173\u95ed, \u8f93\u7801\u6846\u51fa\u4e0d\u6765"
+
+    invoke-direct {p0, v0}, Lcom/sk/keeper/MainActivity;->toast(Ljava/lang/String;)V
+
+    .line 708
+    return-void'''
+settings_jump = '''    new-instance v0, Landroid/content/Intent;
+
+    const-string v1, "android.settings.APP_NOTIFICATION_SETTINGS"
+
+    invoke-direct {v0, v1}, Landroid/content/Intent;-><init>(Ljava/lang/String;)V
+
+    const-string v1, "android.provider.extra.APP_PACKAGE"
+
+    invoke-virtual {p0}, Lcom/sk/keeper/MainActivity;->getPackageName()Ljava/lang/String;
+
+    move-result-object v2
+
+    invoke-virtual {v0, v1, v2}, Landroid/content/Intent;->putExtra(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;
+
+    invoke-virtual {p0, v0}, Lcom/sk/keeper/MainActivity;->startActivity(Landroid/content/Intent;)V
+
+'''
+m = rep(m, notif_off, notif_off.replace("    return-void", settings_jump + "    return-void"), 1)
+print("  通知关闭时跳转系统通知设置")
+
 # ---- 7. 提速:UI 状态轮询 1s / 2s 统一压到 0.5s ----
 m = rep(m, "    const-wide/16 v2, 0x3e8", "    const-wide/16 v2, 0x1f4", 1)
 m = rep(m, "    const-wide/16 v5, 0x7d0", "    const-wide/16 v5, 0x1f4", 1)
