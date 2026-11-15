@@ -1,0 +1,35 @@
+name: build-keeper-native
+
+on:
+  push:
+    paths:
+      - 'legacy/native/**'
+      - '.github/workflows/build-native.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup NDK r27c
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Build keeper.bin / keeper.so
+        run: bash legacy/native/build/build_legacy.sh
+
+      - name: Checksums
+        run: sha256sum legacy/native/_legacy_out/keeper.bin legacy/native/_legacy_out/keeper.so
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: keeper-native
+          path: |
+            legacy/native/_legacy_out/keeper.bin
+            legacy/native/_legacy_out/keeper.so
+          retention-days: 30

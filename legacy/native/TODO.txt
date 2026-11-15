@@ -1,0 +1,57 @@
+还差什么  ·  2026-11-15
+==========================================
+
+【1】必须：让公开仓库的 CI 也能产出这个精简包
+  现状：本地 dec/assets/sk/ 已经换成 keeper.bin + keeper.so，
+        但 MyCode-share 的 apply_fixes.py 只改 smali，不碰 assets。
+        CI 从 legacy/original/Keeper.apk 反编译时，带出来的还是
+        原版那 4 个旧 native，所以线上产物和本地包不一致。
+  要做：
+    a) 把 keeper.bin / keeper.so 推到 MyCode-share 的
+       legacy/assets/sk/（或新建一个 native/ 目录）
+    b) 给 apply_fixes.py 加第 3 个参数（资源目录），在里面把
+       keeper.bin -> dec/assets/sk/boot
+       keeper.so  -> dec/assets/sk/sk_sweep.so / sk_revive.so / sk_guard.so
+    c) 改 build-legacy.yml 调用处，把新参数传进去
+    d) 触发一次 CI，下载产物核对 4 个文件的 SHA256
+
+【2】必须：真机验证（一次都没跑过）
+  设备之前一直掉线，下面这些全是「编译通过」不是「跑通」：
+    - 三个 entry 分派是否都正常（sk_core.c 按 argv[1] 走）
+    - ptrace ATTACH 在真实 am 进程上是否成功
+    - force-stop 是否真的被拦下（而不是 App 被停后拉回）
+    - 拦截弹窗是否弹出、blocked_last 内容对不对
+    - 三兄弟互拉/心跳有没有互相踩
+  建议测法：
+    adb shell am force-stop com.sk.keeper
+    看 logcat 里有没有 "guard: ptrace 冻住 pid=..."
+    看 App 是否完全没被停（而不是闪一下回来）
+
+【3】可选：APK 再瘦约 53 KB
+  现在 3 个 so 是同一份 keeper.so 的三个副本，且 doNotCompress
+  不压缩。要真正只留 2 个文件，得改 smali 的 Payloads.deploy()：
+  只读 boot + keeper.so，并且只 spawn 一次（entry 用 sk_guard，
+  让 sk_core 在一个进程里起三个线程跑三套循环）。
+  代价：要动 deploy 的 smali 和 sk_common.h 的 spawn 逻辑，
+  风险比现在这套高，建议等【2】验证通过再动。
+
+【4】可选：配对问题
+  旧版之前在 OPPO 上遇到 protocol fault (couldn't read status message)，
+  已经加了「配对前 kill-server + start-server」但没验证过。
+  新设备是华为 Android 12，兼容性未知，装机时一起看。
+  另外新项目 com.browns.keeper 那套自研 SPAKE2 配对
+  （AdbPairingClient.kt + Conscrypt + spake2-java）只编译通过，
+  还没接进 WirelessDebugController，也没真机调过。
+
+【5】已知风险
+  - ptrace 依赖「内核没开 Yama」。ANG-AN00 上确认没有
+    /proc/sys/kernel/yama/，但换设备/换内核可能就 ATTACH=EPERM。
+    代码已经做了回退（ATTACH 失败走裸 kill），不会因此放跑攻击者。
+  - 系统设置里点「强行停止」、root 直接 kill，ptrace 一样拦不住
+    （uid 不同，DAC 就过不去）。
+  - 设备连接极不稳定（USB 时断时续），真机验证可能需要多试几次。
+
+【6】产物位置（没放进这个 ZIP，太大）
+  E:/AI/safe-code/android/_apk_analysis/legacy-patch/Keeper_legacy_patched.apk
+  E:/AI/safe-code/android/_apk_analysis/legacy_native/keeper.bin
+  E:/AI/safe-code/android/_apk_analysis/legacy_native/keeper.so
