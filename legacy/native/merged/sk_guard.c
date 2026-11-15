@@ -169,6 +169,61 @@ static int pkg_from_cmd(const char *cmd, char *out, size_t sz)
 }
 
 /*
+ * 再从 /proc/<pid>/{cwd,exe,environ,maps} 里找一次包名。
+ *
+ * 对手把守护 daemon 化之后，cmdline 里常常只剩 "sh /data/local/tmp/x.sh"，
+ * 应用包名只出现在工作目录、可执行文件、环境变量或 mmap 的文件路径里。
+ * 这些都在同 uid(shell) 的可读范围内 —— 找到就能把 force-stop 打回它本体，
+ * 而不是只杀一个随时会复活的 shell。
+ */
+static int pkg_from_proc(pid_t pid, char *out, size_t sz)
+{
+    char path[64], buf[8192];
+    ssize_t n;
+
+    snprintf(path, sizeof(path), "/proc/%d/cwd", (int) pid);
+    n = readlink(path, buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = 0;
+        if (pkg_from_cmd(buf, out, sz) == 0) {
+            return 0;
+        }
+    }
+    snprintf(path, sizeof(path), "/proc/%d/exe", (int) pid);
+    n = readlink(path, buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = 0;
+        if (pkg_from_cmd(buf, out, sz) == 0) {
+            return 0;
+        }
+    }
+
+    const char *files[] = { "/proc/%d/environ", "/proc/%d/maps", NULL };
+    for (int i = 0; files[i]; i++) {
+        snprintf(path, sizeof(path), files[i], (int) pid);
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) {
+            continue;
+        }
+        n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n <= 0) {
+            continue;
+        }
+        buf[n] = 0;
+        for (ssize_t k = 0; k < n; k++) {
+            if (buf[k] == 0) {
+                buf[k] = '\n';          /* environ 是 NUL 分隔 */
+            }
+        }
+        if (pkg_from_cmd(buf, out, sz) == 0) {
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/*
  * 只认真正的"攻击本包"调用形态, 不能只看字符串:
  *   1. /system/bin/sh /system/bin/am force-stop ...   (am 是脚本)
  *   2. app_process ... com.android.commands.am.Am force-stop ...
@@ -304,16 +359,22 @@ static int handle_hit(pid_t pid, const char *cmd)
     }
 
     /*
-     * 3) 如果能从祖先路径里解析出包名, 把 force-stop 原样打回去。
-     *    绝不指向自己。
+     * 3) 解析凶手包名，把 force-stop 原样打回去。
+     *    先看祖先 cmdline；cmdline 里没有路径时，再读 /proc/<pid>/cwd、
+     *    exe、environ、maps —— daemon 化的守护通常只剩一个 sh，包名藏在
+     *    工作目录或环境变量里。绝不指向自己。
      */
     for (int i = 0; i < depth; i++) {
         char acmd[400] = {0};
         char pkg[128];
-        if (sk_cmdline(chain[i], acmd, sizeof(acmd)) <= 0) {
-            continue;
+        int got = -1;
+        if (sk_cmdline(chain[i], acmd, sizeof(acmd)) > 0) {
+            got = pkg_from_cmd(acmd, pkg, sizeof(pkg));
         }
-        if (pkg_from_cmd(acmd, pkg, sizeof(pkg)) == 0 && strcmp(pkg, SK_PKG) != 0) {
+        if (got != 0) {
+            got = pkg_from_proc(chain[i], pkg, sizeof(pkg));
+        }
+        if (got == 0 && strcmp(pkg, SK_PKG) != 0) {
             char c[256];
             snprintf(c, sizeof(c), "am force-stop %s >/dev/null 2>&1", pkg);
             sk_run(c, NULL, 0);
