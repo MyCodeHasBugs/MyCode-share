@@ -117,6 +117,10 @@ BADGE_XML = r'''<?xml version="1.0" encoding="utf-8"?>
 DEC = pathlib.Path(sys.argv[1])
 SHRUN = pathlib.Path(sys.argv[2])
 
+# 可选第 3 个参数:精简 native 目录(里面有 keeper.bin 和 keeper.so)。
+# 给了就把 assets/sk 下的 boot 和三个 so 换成精简版,不给就保持原版。
+NATIVE = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 else None
+
 # 拦截弹窗用的 Runnable:后台轮询线程不能直接 show AlertDialog,
 # 必须 post 回 UI 线程,否则抛 "Can't create handler inside thread ..."。
 BLOCKED_DIALOG_SMALI = r'''.class final Lcom/sk/keeper/MainActivity$BlockedDialog;
@@ -258,7 +262,11 @@ def rep(s: str, old: str, new: str, expect: int) -> str:
     return s.replace(old, new)
 
 
-for f in (PAY, MAIN, YML, SHRUN):
+need = [PAY, MAIN, YML, SHRUN]
+if NATIVE is not None:
+    need += [NATIVE / "keeper.bin", NATIVE / "keeper.so"]
+
+for f in need:
     if not f.exists():
         raise SystemExit("缺文件: %s" % f)
 
@@ -358,35 +366,6 @@ elif good in m:
 else:
     raise SystemExit("通知权限补丁锚点丢失(错误版和正确版都没找到)")
 
-# ---- 5b. 通知被关时不要只 toast:直接跳到本应用的系统通知设置页 ----
-# 真机反馈「通知有问题,他不找你授权」:Android 13+ 首次拒绝后系统不会再弹,
-# 而 startPairNotify 只打印「总开关是关的」就 return,用户没有入口去开。
-notif_off = r'''    const-string v0, "\u901a\u77e5\u88ab\u5173\u95ed, \u8f93\u7801\u6846\u51fa\u4e0d\u6765"
-
-    invoke-direct {p0, v0}, Lcom/sk/keeper/MainActivity;->toast(Ljava/lang/String;)V
-
-    .line 708
-    return-void'''
-settings_jump = '''    new-instance v0, Landroid/content/Intent;
-
-    const-string v1, "android.settings.APP_NOTIFICATION_SETTINGS"
-
-    invoke-direct {v0, v1}, Landroid/content/Intent;-><init>(Ljava/lang/String;)V
-
-    const-string v1, "android.provider.extra.APP_PACKAGE"
-
-    invoke-virtual {p0}, Lcom/sk/keeper/MainActivity;->getPackageName()Ljava/lang/String;
-
-    move-result-object v2
-
-    invoke-virtual {v0, v1, v2}, Landroid/content/Intent;->putExtra(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;
-
-    invoke-virtual {p0, v0}, Lcom/sk/keeper/MainActivity;->startActivity(Landroid/content/Intent;)V
-
-'''
-m = rep(m, notif_off, notif_off.replace("    return-void", settings_jump + "    return-void"), 1)
-print("  通知关闭时跳转系统通知设置")
-
 # ---- 7. 提速:UI 状态轮询 1s / 2s 统一压到 0.5s ----
 m = rep(m, "    const-wide/16 v2, 0x3e8", "    const-wide/16 v2, 0x1f4", 1)
 m = rep(m, "    const-wide/16 v5, 0x7d0", "    const-wide/16 v5, 0x1f4", 1)
@@ -482,6 +461,15 @@ MAIN.write_text(m, encoding="utf-8")
 dst = DEC / "assets/sk/shrun"
 dst.parent.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(SHRUN, dst)
+
+# 精简 native:boot 换 keeper.bin,三个 so 全换成同一份 keeper.so 的副本。
+# 文件名保持不变,所以 smali 的 deploy / sk_spawn 一行都不用动。
+if NATIVE is not None:
+    sk = DEC / "assets/sk"
+    shutil.copyfile(NATIVE / "keeper.bin", sk / "boot")
+    for n in ("sk_sweep.so", "sk_revive.so", "sk_guard.so"):
+        shutil.copyfile(NATIVE / "keeper.so", sk / n)
+    print("  native 精简: keeper.bin -> boot, keeper.so -> 3 个 so 副本")
 
 y = YML.read_text(encoding="utf-8")
 if "- assets/sk/shrun" not in y:
